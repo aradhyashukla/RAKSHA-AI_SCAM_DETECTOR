@@ -1,4 +1,4 @@
-# RAKSHA-AI_SCAM_DETECTOR
+# Raksha — AI Scam Sentinel
 
 A multi-modal scam detection platform: paste text/URLs or upload screenshots
 and QR codes, and get an instant risk score, verdict, and plain-language
