@@ -1,0 +1,9 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+python-multipart>=0.0.9
+opencv-python-headless>=4.9
+numpy>=1.26
+pytesseract>=0.3.10
+requests>=2.31
+python-whois>=0.9

@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Raksha — AI Scam Sentinel</title>
+<meta name="description" content="Paste a message, screenshot, or QR code and Raksha's Sentinel tells you instantly if it's a scam.">
+
+<!-- PWA: installable on mobile home screens and as a desktop app. Zero external
+     CDN or font dependencies on purpose — this must render identically on
+     flaky hackathon-venue wifi or fully offline once installed. -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0A0E17">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="icon-512.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Raksha">
+
+<style>
+  :root {
+    --void: #0A0E17;
+    --panel: #10182B;
+    --panel-border: rgba(140, 160, 220, 0.14);
+    --text-primary: #E8ECF4;
+    --text-dim: #7C8AA8;
+    --violet: #8B5CF6;
+    --violet-dim: rgba(139, 92, 246, 0.35);
+
+    /* Verdict-reactive color — changes via JS. Default: idle calm teal */
+    --verdict: #4CE0D2;
+    --verdict-dim: rgba(76, 224, 210, 0.25);
+    --verdict-glow: rgba(76, 224, 210, 0.45);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { background: var(--void); margin: 0; padding: 0; }
+  body {
+    /* System font stacks only — no Google Fonts CDN, so this looks and
+       loads identically with zero network access. */
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--text-primary);
+    min-height: 100vh;
+    position: relative;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  .font-display {
+    font-family: "Avenir Next", "Century Gothic", Futura, -apple-system, "Segoe UI", sans-serif;
+    letter-spacing: 0.01em;
+  }
+  .font-mono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "Consolas", monospace;
+  }
+
+  a { color: inherit; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  textarea { font: inherit; color: inherit; }
+
+  .hidden { display: none !important; }
+
+  /* ---------- Ambient background: scanline grid + drifting glow ---------- */
+  .bg-grid {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(140,160,220,0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(140,160,220,0.05) 1px, transparent 1px);
+    background-size: 48px 48px;
+    -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 20%, black 40%, transparent 100%);
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 20%, black 40%, transparent 100%);
+  }
+  .bg-glow {
+    position: fixed; z-index: 0; pointer-events: none;
+    width: 900px; height: 900px; border-radius: 50%;
+    top: -400px; left: 50%; transform: translateX(-50%);
+    background: radial-gradient(circle, var(--verdict-dim) 0%, transparent 65%);
+    filter: blur(40px);
+    transition: background 0.8s ease;
+  }
+
+  /* ---------- Layout ---------- */
+  .page {
+    position: relative; z-index: 10;
+    max-width: 720px; margin: 0 auto;
+    padding: 0 24px 96px;
+  }
+
+  /* ---------- Glass panels ---------- */
+  .glass {
+    background: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.01));
+    border: 1px solid var(--panel-border);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+  }
+
+  /* ---------- Header ---------- */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 32px 0 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-dot {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, var(--verdict), transparent 75%);
+    box-shadow: 0 0 16px 2px var(--verdict-glow);
+    transition: background 0.8s ease, box-shadow 0.8s ease;
+    flex-shrink: 0;
+  }
+  .brand-name { font-weight: 700; font-size: 1.125rem; letter-spacing: 0.06em; }
+  .eyebrow {
+    font-size: 0.72rem; color: var(--text-dim); letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  /* ---------- Sentinel orb ---------- */
+  .hero { padding: 40px 0 32px; display: flex; flex-direction: column; align-items: center; }
+  .sentinel-wrap { position: relative; width: 168px; height: 168px; margin: 0 auto; }
+  .sentinel-ring {
+    position: absolute; inset: 0; border-radius: 50%;
+    border: 1px solid var(--verdict-dim);
+    animation: spin-slow 14s linear infinite;
+    transition: border-color 0.8s ease;
+  }
+  .sentinel-ring::before {
+    content: ''; position: absolute; top: -2px; left: 50%; width: 6px; height: 6px;
+    background: var(--verdict); border-radius: 50%; transform: translateX(-50%);
+    box-shadow: 0 0 12px 3px var(--verdict-glow);
+    transition: background 0.8s ease, box-shadow 0.8s ease;
+  }
+  .sentinel-ring.ring-2 { inset: -18px; animation-duration: 20s; animation-direction: reverse; opacity: 0.6; }
+  .sentinel-ring.scanning { animation-duration: 2.2s; }
+  .sentinel-ring.ring-2.scanning { animation-duration: 1.4s; }
+
+  .sentinel-core {
+    position: absolute; inset: 24px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, var(--verdict) 0%, rgba(76,224,210,0.15) 55%, transparent 80%);
+    box-shadow: 0 0 40px 8px var(--verdict-glow), inset 0 0 30px rgba(0,0,0,0.4);
+    animation: breathe 3.6s ease-in-out infinite;
+    transition: background 0.8s ease, box-shadow 0.8s ease;
+  }
+  .sentinel-core.agitated { animation: breathe-fast 0.9s ease-in-out infinite; }
+
+  .sentinel-iris {
+    position: absolute; inset: 0; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .sentinel-iris svg { width: 46%; height: 46%; }
+  .sentinel-pupil { fill: var(--void); transition: transform 0.15s ease; }
+  .sentinel-pupil.blink { transform: scaleY(0.08); }
+
+  @keyframes spin-slow { to { transform: rotate(360deg); } }
+  @keyframes breathe {
+    0%, 100% { transform: scale(1); filter: brightness(1); }
+    50% { transform: scale(1.05); filter: brightness(1.18); }
+  }
+  @keyframes breathe-fast {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.09); }
+  }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-3px); }
+    40% { transform: translateX(3px); }
+    60% { transform: translateX(-2px); }
+    80% { transform: translateX(2px); }
+  }
+  .shake-once { animation: shake 0.4s ease; }
+
+  /* ---------- Speech bubble ---------- */
+  .bubble {
+    position: relative;
+    min-height: 3.2rem;
+    border-radius: 16px;
+    padding: 16px 20px;
+    margin-top: 32px;
+    max-width: 460px;
+    width: 100%;
+    background: var(--panel);
+  }
+  .bubble::before {
+    content: '';
+    position: absolute; top: -9px; left: 50%; transform: translateX(-50%);
+    width: 16px; height: 16px;
+    background: inherit;
+    border-left: 1px solid var(--panel-border);
+    border-top: 1px solid var(--panel-border);
+    clip-path: polygon(0 100%, 100% 100%, 50% 0);
+  }
+  .bubble-text { font-size: 15px; line-height: 1.6; margin: 0; }
+  .typewriter-cursor {
+    display: inline-block; width: 2px; height: 1em; background: var(--verdict);
+    animation: blink-cursor 0.9s step-end infinite; vertical-align: text-bottom; margin-left: 2px;
+    transition: background 0.8s ease;
+  }
+  @keyframes blink-cursor { 50% { opacity: 0; } }
+
+  /* ---------- Radar sweep for dropzone ---------- */
+  .radar-sweep {
+    position: absolute; inset: 0; border-radius: inherit; overflow: hidden; pointer-events: none;
+    opacity: 0;
+  }
+  .radar-sweep.active { opacity: 1; }
+  .radar-sweep::after {
+    content: ''; position: absolute; inset: -50%;
+    background: conic-gradient(from 0deg, transparent 0%, var(--verdict-dim) 12%, transparent 24%);
+    animation: sweep-rotate 1.6s linear infinite;
+  }
+  @keyframes sweep-rotate { to { transform: rotate(360deg); } }
+
+  /* ---------- Input panel ---------- */
+  .panel { border-radius: 20px; padding: 20px; background: var(--panel); }
+
+  .tabs {
+    display: flex; gap: 24px;
+    border-bottom: 1px solid var(--panel-border);
+    margin-bottom: 20px;
+  }
+  .tab-btn {
+    background: none; border: none;
+    font-weight: 500; font-size: 0.9rem;
+    padding: 0 0 12px;
+    transition: all 0.25s ease;
+    color: var(--text-dim);
+    border-bottom: 2px solid transparent;
+  }
+  .tab-btn.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--violet);
+  }
+
+  .textarea-input {
+    width: 100%;
+    background: rgba(0,0,0,0.2);
+    border: 1px solid var(--panel-border);
+    border-radius: 14px;
+    padding: 14px;
+    font-size: 0.9rem;
+    resize: none;
+    outline: none;
+    transition: border-color 0.2s ease;
+  }
+  .textarea-input::placeholder { color: var(--text-dim); }
+  .textarea-input:focus { border-color: var(--verdict); }
+
+  /* ---------- Drop zone ---------- */
+  .dropzone {
+    border: 1.5px dashed var(--panel-border);
+    border-radius: 14px;
+    padding: 32px;
+    text-align: center;
+    cursor: pointer;
+    position: relative;
+    transition: all 0.25s ease;
+  }
+  .dropzone.drag-over { border-color: var(--verdict); background: rgba(76,224,210,0.05); }
+  .dz-label { font-size: 0.9rem; color: var(--text-dim); margin: 0 0 4px; }
+  .dz-hint { font-size: 0.72rem; color: var(--text-dim); opacity: 0.6; margin: 0; }
+
+  /* ---------- Buttons ---------- */
+  .btn-scan {
+    width: 100%; margin-top: 20px;
+    border: none; border-radius: 14px;
+    padding: 14px;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    font-weight: 600; font-size: 0.9rem; letter-spacing: 0.02em;
+    color: #fff;
+    background: linear-gradient(135deg, var(--violet), #6D28D9);
+    transition: all 0.25s ease;
+    box-shadow: 0 0 0 rgba(139,92,246,0);
+  }
+  .btn-scan:hover:not(:disabled) {
+    box-shadow: 0 0 28px rgba(139,92,246,0.55);
+    transform: translateY(-1px);
+  }
+  .btn-scan:active:not(:disabled) { transform: translateY(0); }
+  .btn-scan:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .btn-ghost {
+    background: none;
+    border: 1px solid var(--panel-border);
+    border-radius: 14px;
+    padding: 10px 16px;
+    font-size: 0.9rem; font-weight: 500;
+    display: flex; align-items: center; gap: 8px;
+    white-space: nowrap;
+    transition: all 0.2s ease;
+  }
+  .btn-ghost:hover { border-color: var(--verdict); background: rgba(255,255,255,0.03); }
+  .btn-ghost:disabled { opacity: 0.6; cursor: not-allowed; }
+
+  /* ---------- Result panel ---------- */
+  .result { margin-top: 24px; }
+  .result-top {
+    border-radius: 20px; padding: 24px; background: var(--panel);
+    display: flex; align-items: center; gap: 24px;
+  }
+  .gauge-wrap { position: relative; width: 112px; height: 112px; flex-shrink: 0; }
+  .gauge-wrap svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .gauge-ring { transition: stroke-dashoffset 1.2s cubic-bezier(.22,.9,.35,1), stroke 0.8s ease; }
+  .gauge-center {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  .gauge-score { font-weight: 600; font-size: 1.5rem; }
+  .gauge-max { font-size: 0.62rem; color: var(--text-dim); letter-spacing: 0.06em; }
+
+  .verdict-badge {
+    display: inline-block; padding: 4px 12px; border-radius: 999px;
+    font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+    margin-bottom: 8px;
+    background: var(--verdict-dim); color: var(--verdict); border: 1px solid var(--verdict-glow);
+    transition: all 0.8s ease;
+  }
+  .result-subtitle { font-size: 0.9rem; color: var(--text-dim); margin: 0; }
+
+  .section-label {
+    font-size: 0.72rem; color: var(--text-dim); text-transform: uppercase;
+    letter-spacing: 0.1em; margin: 0 0 10px; padding: 0 4px;
+  }
+  .rules-list { display: flex; flex-direction: column; gap: 8px; }
+  .chip {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--panel-border);
+    border-radius: 14px;
+    transition: all 0.2s ease;
+  }
+  .chip:hover { border-color: var(--verdict-dim); }
+  .rule-chip { padding: 12px 16px; display: flex; align-items: flex-start; gap: 10px; font-size: 0.88rem; }
+  .rule-weight { font-size: 0.75rem; margin-top: 2px; color: var(--verdict); flex-shrink: 0; }
+
+  .entities-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .entity-chip {
+    padding: 6px 12px; border-radius: 10px;
+    font-size: 0.72rem;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .entity-type { color: var(--text-dim); text-transform: uppercase; font-size: 0.62rem; }
+  .entity-count {
+    font-size: 0.62rem; font-weight: 600; padding: 2px 7px; border-radius: 999px;
+    background: var(--verdict-dim); color: var(--verdict);
+    transition: background 0.8s ease, color 0.8s ease;
+  }
+
+  .footer-row {
+    margin-top: 24px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  }
+  .disclaimer { font-size: 0.75rem; color: var(--text-dim); max-width: 60%; margin: 0; }
+
+  /* ---------- Install banner ---------- */
+  .install-bar {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    border-radius: 16px; padding: 12px 16px; margin-top: 20px;
+    background: var(--panel); border: 1px solid var(--panel-border);
+  }
+  .install-bar p { margin: 0; font-size: 0.82rem; color: var(--text-dim); }
+  .install-btn {
+    border: none; border-radius: 10px; padding: 8px 14px;
+    background: var(--violet); color: #fff; font-weight: 600; font-size: 0.8rem;
+    flex-shrink: 0;
+  }
+
+  /* ---------- Fade/slide-in ---------- */
+  @keyframes fade-slide-up {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .fade-in { animation: fade-slide-up 0.5s ease forwards; }
+
+  /* ---------- Scrollbar ---------- */
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--panel-border); border-radius: 4px; }
+
+  @media (max-width: 520px) {
+    .result-top { flex-direction: column; align-items: flex-start; }
+    .footer-row { flex-direction: column; align-items: stretch; }
+    .disclaimer { max-width: 100%; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sentinel-ring, .sentinel-core, .radar-sweep::after, .typewriter-cursor { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+<div class="bg-glow" id="bgGlow"></div>
+
+<div class="page">
+
+  <!-- ============ Header ============ -->
+  <header class="header">
+    <div class="brand">
+      <div class="brand-dot"></div>
+      <span class="font-display brand-name">RAKSHA</span>
+    </div>
+    <span class="font-mono eyebrow">AI Scam Sentinel</span>
+  </header>
+
+  <!-- ============ Sentinel + speech ============ -->
+  <section class="hero">
+    <div class="sentinel-wrap">
+      <div class="sentinel-ring ring-2" id="ring2"></div>
+      <div class="sentinel-ring" id="ring1"></div>
+      <div class="sentinel-core" id="sentinelCore">
+        <div class="sentinel-iris">
+          <svg viewBox="0 0 100 100"><circle class="sentinel-pupil" id="pupil" cx="50" cy="50" r="46"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="glass bubble">
+      <p class="font-display bubble-text" id="speechText">
+        Hey — I'm Sentinel. Paste a suspicious message, or upload a screenshot or QR code, and I'll tell you straight away if something's off.<span class="typewriter-cursor"></span>
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ Input panel ============ -->
+  <section class="glass panel">
+
+    <div class="tabs">
+      <button class="tab-btn font-display active" data-tab="text">Paste Text / URL</button>
+      <button class="tab-btn font-display" data-tab="screenshot">Screenshot</button>
+      <button class="tab-btn font-display" data-tab="qr">QR Code</button>
+    </div>
+
+    <!-- Text tab -->
+    <div id="panel-text" class="tab-panel">
+      <textarea id="textInput" rows="4" placeholder="Paste the SMS, WhatsApp message, email, or link here..."
+        class="textarea-input font-mono"></textarea>
+    </div>
+
+    <!-- Screenshot tab -->
+    <div id="panel-screenshot" class="tab-panel hidden">
+      <div class="dropzone" id="dropzoneScreenshot">
+        <div class="radar-sweep"></div>
+        <p class="dz-label" id="screenshotLabel">Drop a screenshot here, or click to browse</p>
+        <p class="dz-hint font-mono">PNG · JPG</p>
+        <input type="file" id="screenshotInput" accept="image/*" class="hidden">
+      </div>
+    </div>
+
+    <!-- QR tab -->
+    <div id="panel-qr" class="tab-panel hidden">
+      <div class="dropzone" id="dropzoneQr">
+        <div class="radar-sweep"></div>
+        <p class="dz-label" id="qrLabel">Drop a QR code image here, or click to browse</p>
+        <p class="dz-hint font-mono">PNG · JPG</p>
+        <input type="file" id="qrInput" accept="image/*" class="hidden">
+      </div>
+    </div>
+
+    <button id="scanBtn" class="btn-scan font-display">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z"/><path d="M21 21l-4.35-4.35"/></svg>
+      <span id="scanBtnText">Scan for threats</span>
+    </button>
+  </section>
+
+  <!-- ============ Result panel ============ -->
+  <section id="resultPanel" class="result hidden">
+
+    <div class="glass result-top">
+      <div class="gauge-wrap">
+        <svg viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="8"/>
+          <circle id="gaugeRing" class="gauge-ring" cx="50" cy="50" r="42" fill="none" stroke="var(--verdict)" stroke-width="8" stroke-linecap="round" stroke-dasharray="264" stroke-dashoffset="264"/>
+        </svg>
+        <div class="gauge-center">
+          <span id="scoreNum" class="font-mono gauge-score">0</span>
+          <span class="font-mono gauge-max">/ 100</span>
+        </div>
+      </div>
+
+      <div>
+        <span id="verdictBadge" class="verdict-badge font-display">Safe</span>
+        <p class="result-subtitle" id="resultSubtitle">Analysis complete.</p>
+      </div>
+    </div>
+
+    <!-- Triggered rules -->
+    <div id="rulesSection" style="margin-top:16px;">
+      <p class="font-mono section-label">Signals detected</p>
+      <div id="rulesList" class="rules-list"></div>
+    </div>
+
+    <!-- Entities -->
+    <div id="entitiesSection" style="margin-top:20px;" class="hidden">
+      <p class="font-mono section-label">Entities found</p>
+      <div id="entitiesList" class="entities-list"></div>
+    </div>
+
+    <!-- Report button -->
+    <div class="footer-row">
+      <p class="disclaimer">Not a legal verdict — a decision-support signal. When in doubt, verify independently.</p>
+      <button id="reportBtn" class="btn-ghost font-display">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.29 3.86l-8.18 14A2 2 0 0 0 3.82 21h16.36a2 2 0 0 0 1.71-3.14l-8.18-14a2 2 0 0 0-3.42 0z"/></svg>
+        <span id="reportBtnText">Report as scam</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ============ Install banner (PWA) ============ -->
+  <section id="installBar" class="install-bar hidden">
+    <p>Install Raksha as an app — works offline, launches from your home screen.</p>
+    <button id="installBtn" class="install-btn font-display">Install</button>
+  </section>
+
+</div>
+
+<script>
+// API_BASE auto-detects local dev vs. the deployed cloud backend, so the
+// same index.html works unmodified on your machine AND once published —
+// no manual editing needed after deployment.
+//
+// IMPORTANT: replace the placeholder URL below with YOUR actual Render
+// (or other host) backend URL once you have it from the deploy step —
+// this one line is the only thing you need to change post-deployment.
+const DEPLOYED_BACKEND_URL = 'https://raksha-backend.onrender.com';
+
+const API_BASE = (['localhost', '127.0.0.1'].includes(window.location.hostname))
+  ? 'http://127.0.0.1:8000'
+  : DEPLOYED_BACKEND_URL;
+
+// ---------------- Verdict color themes ----------------
+const VERDICT_THEMES = {
+  safe:        { hex: '#4CE0D2', dim: 'rgba(76,224,210,0.25)',  glow: 'rgba(76,224,210,0.45)',  label: 'Safe',        agitated: false },
+  suspicious:  { hex: '#F5A623', dim: 'rgba(245,166,35,0.25)',  glow: 'rgba(245,166,35,0.5)',   label: 'Suspicious',  agitated: false },
+  dangerous:   { hex: '#FF4757', dim: 'rgba(255,71,87,0.28)',   glow: 'rgba(255,71,87,0.55)',   label: 'Dangerous',   agitated: true  },
+};
+
+function applyVerdictTheme(verdict) {
+  const t = VERDICT_THEMES[verdict] || VERDICT_THEMES.safe;
+  const root = document.documentElement.style;
+  root.setProperty('--verdict', t.hex);
+  root.setProperty('--verdict-dim', t.dim);
+  root.setProperty('--verdict-glow', t.glow);
+
+  const core = document.getElementById('sentinelCore');
+  core.classList.toggle('agitated', t.agitated);
+  if (t.agitated) {
+    core.classList.remove('shake-once'); void core.offsetWidth; core.classList.add('shake-once');
+  }
+  document.getElementById('verdictBadge').textContent = t.label;
+}
+
+// ---------------- Sentinel blink (idle life) ----------------
+function scheduleBlink() {
+  const delay = 2500 + Math.random() * 3000;
+  setTimeout(() => {
+    const pupil = document.getElementById('pupil');
+    pupil.classList.add('blink');
+    setTimeout(() => pupil.classList.remove('blink'), 140);
+    scheduleBlink();
+  }, delay);
+}
+scheduleBlink();
+
+// ---------------- Typewriter ----------------
+function typewrite(el, text, speed = 16) {
+  return new Promise(resolve => {
+    el.innerHTML = '';
+    let i = 0;
+    const cursor = document.createElement('span');
+    cursor.className = 'typewriter-cursor';
+    function step() {
+      if (i <= text.length) {
+        el.textContent = text.slice(0, i);
+        el.appendChild(cursor);
+        i++;
+        setTimeout(step, speed);
+      } else {
+        resolve();
+      }
+    }
+    step();
+  });
+}
+
+// ---------------- Tabs ----------------
+let activeTab = 'text';
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
+    activeTab = btn.dataset.tab;
+    document.getElementById(`panel-${activeTab}`).classList.remove('hidden');
+  });
+});
+
+// ---------------- File handling (screenshot + QR) ----------------
+let selectedScreenshot = null;
+let selectedQr = null;
+
+function setupDropzone(zoneId, inputId, labelId, onFile) {
+  const zone = document.getElementById(zoneId);
+  const input = document.getElementById(inputId);
+  const label = document.getElementById(labelId);
+
+  zone.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    if (input.files[0]) {
+      onFile(input.files[0]);
+      label.textContent = `Selected: ${input.files[0].name}`;
+    }
+  });
+  ['dragover', 'dragenter'].forEach(evt => zone.addEventListener(evt, e => {
+    e.preventDefault(); zone.classList.add('drag-over');
+  }));
+  ['dragleave', 'drop'].forEach(evt => zone.addEventListener(evt, e => {
+    e.preventDefault(); zone.classList.remove('drag-over');
+  }));
+  zone.addEventListener('drop', e => {
+    const file = e.dataTransfer.files[0];
+    if (file) { onFile(file); label.textContent = `Selected: ${file.name}`; }
+  });
+}
+setupDropzone('dropzoneScreenshot', 'screenshotInput', 'screenshotLabel', f => selectedScreenshot = f);
+setupDropzone('dropzoneQr', 'qrInput', 'qrLabel', f => selectedQr = f);
+
+// ---------------- Scanning state ----------------
+function setScanning(active) {
+  document.getElementById('ring1').classList.toggle('scanning', active);
+  document.getElementById('ring2').classList.toggle('scanning', active);
+  document.querySelectorAll('.radar-sweep').forEach(s => s.classList.toggle('active', active));
+  const btn = document.getElementById('scanBtn');
+  btn.disabled = active;
+  document.getElementById('scanBtnText').textContent = active ? 'Scanning...' : 'Scan for threats';
+}
+
+// ---------------- Result rendering ----------------
+let lastSubmissionId = null;
+
+function renderResult(data) {
+  applyVerdictTheme(data.verdict);
+
+  const panel = document.getElementById('resultPanel');
+  panel.classList.remove('hidden');
+  panel.classList.remove('fade-in'); void panel.offsetWidth;
+  panel.classList.add('fade-in');
+
+  // Gauge
+  const circumference = 264;
+  const offset = circumference - (data.risk_score / 100) * circumference;
+  document.getElementById('gaugeRing').style.strokeDashoffset = offset;
+  document.getElementById('scoreNum').textContent = data.risk_score;
+
+  const subtitleMap = {
+    safe: "No strong scam indicators found.",
+    suspicious: "Some warning signs detected — verify before acting.",
+    dangerous: "Strong scam indicators found — do not act on this.",
+  };
+  document.getElementById('resultSubtitle').textContent = subtitleMap[data.verdict] || '';
+
+  // Rules
+  const rulesList = document.getElementById('rulesList');
+  rulesList.innerHTML = '';
+  if (data.triggered_rules.length === 0) {
+    const div = document.createElement('div');
+    div.className = 'chip rule-chip';
+    div.style.color = 'var(--text-dim)';
+    div.textContent = 'No suspicious signals triggered.';
+    rulesList.appendChild(div);
+  } else {
+    data.triggered_rules.forEach(rule => {
+      const div = document.createElement('div');
+      div.className = 'chip rule-chip';
+      const weight = document.createElement('span');
+      weight.className = 'font-mono rule-weight';
+      weight.textContent = `+${rule.weight}`;
+      const desc = document.createElement('span');
+      desc.textContent = rule.description;
+      div.appendChild(weight);
+      div.appendChild(desc);
+      rulesList.appendChild(div);
+    });
+  }
+
+  // Entities
+  const entitiesSection = document.getElementById('entitiesSection');
+  const entitiesList = document.getElementById('entitiesList');
+  entitiesList.innerHTML = '';
+  if (data.entities.length > 0) {
+    entitiesSection.classList.remove('hidden');
+    data.entities.forEach(ent => {
+      const chip = document.createElement('div');
+      chip.className = 'chip entity-chip font-mono';
+      const type = document.createElement('span');
+      type.className = 'entity-type';
+      type.textContent = ent.entity_type;
+      const value = document.createElement('span');
+      value.textContent = ent.value;
+      chip.appendChild(type);
+      chip.appendChild(value);
+      if (ent.report_count > 0) {
+        const badge = document.createElement('span');
+        badge.className = 'entity-count';
+        badge.textContent = `${ent.report_count}× reported`;
+        chip.appendChild(badge);
+      }
+      entitiesList.appendChild(chip);
+    });
+  } else {
+    entitiesSection.classList.add('hidden');
+  }
+
+  lastSubmissionId = data.submission_id;
+  document.getElementById('reportBtnText').textContent = 'Report as scam';
+  document.getElementById('reportBtn').disabled = false;
+
+  // Sentinel speaks the explanation
+  typewrite(document.getElementById('speechText'), data.explanation || subtitleMap[data.verdict]);
+
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function showError(message) {
+  typewrite(document.getElementById('speechText'), `Hmm, something went wrong: ${message}`);
+}
+
+// ---------------- API calls ----------------
+async function analyzeText(text) {
+  const res = await fetch(`${API_BASE}/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, source: 'text' }),
+  });
+  if (!res.ok) throw new Error(`Server returned ${res.status}`);
+  return res.json();
+}
+
+async function analyzeFile(file, endpoint) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await fetch(`${API_BASE}${endpoint}`, { method: 'POST', body: formData });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `Server returned ${res.status}`);
+  }
+  return res.json();
+}
+
+document.getElementById('scanBtn').addEventListener('click', async () => {
+  setScanning(true);
+  typewrite(document.getElementById('speechText'), 'Scanning...', 10);
+
+  try {
+    let data;
+    if (activeTab === 'text') {
+      const text = document.getElementById('textInput').value.trim();
+      if (!text) { showError('Paste something first.'); setScanning(false); return; }
+      data = await analyzeText(text);
+    } else if (activeTab === 'screenshot') {
+      if (!selectedScreenshot) { showError('Choose a screenshot first.'); setScanning(false); return; }
+      data = await analyzeFile(selectedScreenshot, '/analyze/screenshot');
+    } else {
+      if (!selectedQr) { showError('Choose a QR image first.'); setScanning(false); return; }
+      data = await analyzeFile(selectedQr, '/analyze/qr');
+    }
+    renderResult(data);
+  } catch (err) {
+    showError(err.message.includes('fetch') ? "Can't reach the backend — is it running on port 8000?" : err.message);
+  } finally {
+    setScanning(false);
+  }
+});
+
+document.getElementById('reportBtn').addEventListener('click', async () => {
+  if (lastSubmissionId === null) return;
+  const btn = document.getElementById('reportBtn');
+  btn.disabled = true;
+  try {
+    const res = await fetch(`${API_BASE}/report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ submission_id: lastSubmissionId }),
+    });
+    if (!res.ok) throw new Error('Report failed');
+    document.getElementById('reportBtnText').textContent = 'Reported ✓';
+    typewrite(document.getElementById('speechText'), "Thanks — I've logged this. It'll help warn the next person who runs into it.");
+  } catch (err) {
+    document.getElementById('reportBtnText').textContent = 'Report as scam';
+    btn.disabled = false;
+  }
+});
+
+// ---------------- PWA: service worker + install prompt ----------------
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {
+      // Non-fatal — app still works without offline caching, just won't
+      // survive a full network drop before first load.
+    });
+  });
+}
+
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  document.getElementById('installBar').classList.remove('hidden');
+});
+document.getElementById('installBtn').addEventListener('click', async () => {
+  if (!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  document.getElementById('installBar').classList.add('hidden');
+});
+window.addEventListener('appinstalled', () => {
+  document.getElementById('installBar').classList.add('hidden');
+});
+</script>
+
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "Raksha — AI Scam Sentinel",
+  "short_name": "Raksha",
+  "description": "Paste a message, screenshot, or QR code and Raksha's Sentinel tells you instantly if it's a scam.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0A0E17",
+  "theme_color": "#0A0E17",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
